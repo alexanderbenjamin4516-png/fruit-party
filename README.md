@@ -49,7 +49,7 @@ camera can see your hand!"*
 | Pill stays yellow | Your hand is out of frame — camera probably sees only your head and shoulders. Step back, or angle the camera down, then wave at chest height. |
 | Camera prompt never appears / always denied | iPad **Settings → Apps → Safari → Camera → Ask/Allow**, then reload. Or in Safari tap **aA → Website Settings → Camera → Allow**. |
 | "Camera needs a secure (https) page" | You opened it via `http://` or a file. Use the GitHub Pages `https://` URL. |
-| No sound | Tap the screen once; check the side switch / volume; iPad Silent mode mutes it. |
+| No sound | Tap the screen once (any tap restarts the audio engine) and check the volume. The ringer/silent switch does **not** mute the game after the first tap — like a real game, it claims the speaker (which may pause background music). ⚙️ shows a live "Audio engine: …" line so you can see what it's doing. |
 | Hands feel laggy | The game lowers its own tracking rate first, then rebuilds the tracker in a compatible mode, and only then switches to touch — the pill always shows where it landed. |
 
 ## Desktop

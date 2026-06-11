@@ -60,6 +60,7 @@
       width:min(92vw, 420px); z-index:30; box-shadow:0 12px 40px rgba(0,0,0,.5); }
   #panel h3 { margin-bottom:14px; font-size:22px; }
   #panel label { display:flex; align-items:center; gap:10px; font-size:22px; margin:10px 0 18px; }
+  #audState { font-size:13px; opacity:.75; margin:-8px 0 12px; min-height:16px; }
   #panel input[type=range] { flex:1; height:40px; }
   #closePanel { display:block; width:100%; padding:14px; font-size:20px; font-weight:700;
       border:none; border-radius:12px; background:#21c063; color:#fff; }
@@ -122,6 +123,7 @@
 <div id="panel" class="hidden">
   <h3>⚙️ Fruit speed</h3>
   <label>🐢 <input id="speed" type="range" min="0.5" max="1.6" step="0.05"> 🐇</label>
+  <div id="audState"></div>
   <div id="roomSec">
     <h3>👨‍👧 Play together</h3>
     <input id="pname" maxlength="12" placeholder="Your name" autocomplete="off">
@@ -188,19 +190,84 @@ $('speed').addEventListener('input', e => {
   speedMul = parseFloat(e.target.value);
   try { localStorage.setItem('fp_speed', speedMul); } catch (err) {}
 });
-$('gear').addEventListener('click', () => $('panel').classList.toggle('hidden'));
+$('gear').addEventListener('click', () => { $('panel').classList.toggle('hidden'); updateAudState(); });
 $('closePanel').addEventListener('click', () => $('panel').classList.add('hidden'));
 
 // ---------- sounds: tiny synthesized WebAudio, no files needed ----------
-// iOS rule: an AudioContext only makes sound after being created/resumed
-// inside a real user tap, so initAudio() runs in every button/touch handler.
-let AC = null;
+// iOS rules, all handled here:
+// - an AudioContext only makes sound after being created/resumed inside a
+//   real user tap, so initAudio() runs in every button/touch handler
+// - starting the camera can flip the context to webkit's 'interrupted'
+//   state (not 'suspended'!), so we resume whenever state !== 'running',
+//   from onstatechange, visibility/pageshow, and any tap on the page
+// - the ringer/silent switch mutes WebAudio while the page is in the
+//   default 'ambient' audio session: we ask for a 'playback' session
+//   (iOS 17+) AND loop a tiny inline silent <audio> (older iOS), which is
+//   what real games do so they play regardless of the switch
+let AC = null, silentEl = null;
+
+// 0.25s of 8-bit mono silence as a WAV data URI — built right here in JS,
+// nothing fetched from the network
+function silentWavURI() {
+  const rate = 8000, n = rate / 4, len = 44 + n;
+  const b = new Uint8Array(len), dv = new DataView(b.buffer);
+  const str = (off, s) => { for (let i = 0; i < s.length; i++) b[off + i] = s.charCodeAt(i); };
+  str(0, 'RIFF'); dv.setUint32(4, len - 8, true); str(8, 'WAVE');
+  str(12, 'fmt '); dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);      // PCM, mono
+  dv.setUint32(24, rate, true); dv.setUint32(28, rate, true); // sample/byte rate
+  dv.setUint16(32, 1, true); dv.setUint16(34, 8, true);       // align, 8-bit
+  str(36, 'data'); dv.setUint32(40, n, true);
+  b.fill(128, 44); // 128 = silence midpoint for 8-bit PCM
+  let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return 'data:audio/wav;base64,' + btoa(s);
+}
+
 function initAudio() {
   try {
-    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
-    if (AC.state === 'suspended') AC.resume();
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+    if (!AC) {
+      AC = new (window.AudioContext || window.webkitAudioContext)();
+      AC.onstatechange = () => {
+        if (AC.state !== 'running') { try { AC.resume().catch(() => {}); } catch (e) {} }
+        updateAudState();
+      };
+    }
+    if (AC.state !== 'running') { try { AC.resume().catch(() => {}); } catch (e) {} }
+    if (!silentEl) {
+      silentEl = document.createElement('audio');
+      silentEl.src = silentWavURI();
+      silentEl.loop = true;
+      silentEl.setAttribute('playsinline', '');
+      silentEl.play().catch(() => {});
+    } else if (silentEl.paused) silentEl.play().catch(() => {});
   } catch (e) {}
+  updateAudState();
 }
+
+// gentle retry from anywhere a gesture or wake-up happens
+function kickAudio() {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+    if (AC && AC.state !== 'running') AC.resume().catch(() => {});
+    if (silentEl && silentEl.paused) silentEl.play().catch(() => {});
+  } catch (e) {}
+  updateAudState();
+}
+document.addEventListener('pointerdown', kickAudio, { passive: true });
+document.addEventListener('touchstart', kickAudio, { passive: true });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) kickAudio(); });
+addEventListener('pageshow', kickAudio);
+
+// live audio-state line in the settings panel (debugging on a phone)
+function updateAudState() {
+  const el = $('audState');
+  if (!el || $('panel').classList.contains('hidden')) return;
+  let sess = '';
+  try { if (navigator.audioSession) sess = ' · session: ' + navigator.audioSession.type; } catch (e) {}
+  el.textContent = '🔊 Audio engine: ' + (AC ? AC.state : 'not started — tap Start first') + sess;
+}
+setInterval(updateAudState, 1000);
 function tone(f0, f1, dur, type, vol, delay) {
   if (!AC) return;
   const t = AC.currentTime + (delay || 0);
@@ -558,6 +625,7 @@ async function startCamera() {
     try { await cam.play(); } catch (e) {} // muted+playsinline video autoplays anyway
     cam.style.display = 'block';
     camOn = true;
+    initAudio(); // iOS can flip the AudioContext to 'interrupted' when the camera attaches
     return true;
   } catch (err) {
     showChip(err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')
@@ -1196,6 +1264,10 @@ window.__game = {
   get running() { return running; },
   get camOn() { return camOn; },
   get handsStatus() { return handsStatus; },
+  get audio() { return { state: AC ? AC.state : null,
+    silentLoop: !!silentEl && !silentEl.paused, silentLoopSet: silentEl ? silentEl.loop : null,
+    silentInline: silentEl ? silentEl.src.startsWith('data:audio/wav;base64,') : null,
+    silentBytes: silentEl ? silentEl.src.length : 0 }; },
   get delegate() { return currentDelegate; },
   get landmarker() { return landmarker; },
   get handSeen() { return performance.now() - lastHandSeen < 1000; },
