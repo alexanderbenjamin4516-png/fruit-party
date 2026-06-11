@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>🍉 Fruit Party!</title>
+<style>
+  /* ---------- layout: everything is fixed full-screen layers ---------- */
+  * { margin:0; padding:0; box-sizing:border-box;
+      -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; width:100%; position:fixed; overflow:hidden;
+      font-family:-apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { background:linear-gradient(160deg,#3b1a72,#0f4d92,#0e7a5f);
+      background-size:300% 300%; animation:bgshift 16s ease infinite; }
+  @keyframes bgshift { 0%{background-position:0% 0%} 50%{background-position:100% 100%} 100%{background-position:0% 0%} }
+
+  /* mirrored selfie camera behind the game canvas (hidden until camera starts) */
+  #cam { position:fixed; inset:0; width:100%; height:100%; object-fit:cover;
+         transform:scaleX(-1); display:none; }
+  #game { position:fixed; inset:0; touch-action:none; cursor:crosshair; }
+
+  /* ---------- HUD ---------- */
+  #score { position:fixed; top:calc(env(safe-area-inset-top, 0px) + 4px); left:0; right:0;
+      text-align:center; font-size:min(14vw, 90px); font-weight:900; color:#fff;
+      text-shadow:0 4px 14px rgba(0,0,0,.5); pointer-events:none;
+      transition:transform .12s ease-out; z-index:10; }
+  #score.bump { transform:scale(1.22); }
+  #banner { position:fixed; top:34%; left:0; right:0; text-align:center;
+      font-size:min(20vw, 130px); font-weight:900; color:#ffe45e;
+      text-shadow:0 6px 18px rgba(0,0,0,.55); pointer-events:none; z-index:11;
+      opacity:0; transform:scale(.3); transition:opacity .25s, transform .35s cubic-bezier(.2,1.6,.4,1); }
+  #banner.show { opacity:1; transform:scale(1); }
+  #chip { position:fixed; bottom:calc(env(safe-area-inset-bottom, 0px) + 12px); left:50%;
+      transform:translateX(-50%); background:rgba(0,0,0,.5); color:#fff; padding:8px 18px;
+      border-radius:999px; font-size:16px; max-width:92vw; text-align:center;
+      pointer-events:none; opacity:0; transition:opacity .4s; z-index:12; }
+
+  /* ---------- buttons & panels ---------- */
+  button { font-family:inherit; cursor:pointer; }
+  #gear { position:fixed; top:calc(env(safe-area-inset-top, 0px) + 8px); right:12px;
+      width:54px; height:54px; font-size:28px; border:none; border-radius:50%;
+      background:rgba(0,0,0,.35); color:#fff; z-index:20; display:none; }
+  .hidden { display:none !important; }
+  #panel { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+      background:rgba(15,10,45,.92); color:#fff; border-radius:20px; padding:22px 26px;
+      width:min(92vw, 420px); z-index:30; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  #panel h3 { margin-bottom:14px; font-size:22px; }
+  #panel label { display:flex; align-items:center; gap:10px; font-size:22px; margin:10px 0 18px; }
+  #panel input[type=range] { flex:1; height:40px; }
+  #closePanel { display:block; width:100%; padding:14px; font-size:20px; font-weight:700;
+      border:none; border-radius:12px; background:#21c063; color:#fff; }
+  #roomSec { border-top:1px solid rgba(255,255,255,.25); margin:16px 0; padding-top:12px; }
+  #roomSec input { display:block; width:100%; margin:8px 0; padding:12px; font-size:18px;
+      border:none; border-radius:10px; background:rgba(255,255,255,.92); color:#222; }
+  #joinBtn { width:100%; padding:12px; font-size:18px; font-weight:700; border:none;
+      border-radius:10px; background:#4a7dff; color:#fff; margin:6px 0 4px; }
+  #roomStatus { font-size:14px; opacity:.85; min-height:18px; margin-bottom:8px; }
+  #board { position:fixed; top:calc(env(safe-area-inset-top, 0px) + 10px); left:12px;
+      z-index:10; pointer-events:none; display:flex; flex-direction:column; gap:6px; }
+  #board .prow { background:rgba(0,0,0,.45); color:#fff; padding:6px 14px; font-size:18px;
+      border-radius:999px; }
+  #board .prow.me { background:rgba(33,192,99,.65); }
+
+  /* ---------- start screen ---------- */
+  #start { position:fixed; inset:0; z-index:40; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:18px; text-align:center; padding:24px;
+      background:rgba(12,6,40,.55); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); }
+  #start .fruits { font-size:min(18vw, 96px); animation:bob 2.2s ease-in-out infinite; }
+  @keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-14px)} }
+  #start h1 { color:#fff; font-size:min(12vw, 64px); text-shadow:0 4px 14px rgba(0,0,0,.5); }
+  #start p { color:#ffe; font-size:min(5.5vw, 24px); max-width:520px; }
+  #start .tiny { font-size:14px; opacity:.75; }
+  .bigbtn { font-size:min(7vw, 30px); font-weight:800; color:#fff; border:none;
+      padding:20px 46px; border-radius:999px; background:linear-gradient(135deg,#ff5f6d,#ffc371);
+      box-shadow:0 10px 26px rgba(0,0,0,.4); }
+  .bigbtn:active { transform:scale(.95); }
+  .softbtn { font-size:min(4.5vw, 19px); color:#fff; border:1px solid rgba(255,255,255,.5);
+      padding:12px 26px; border-radius:999px; background:rgba(255,255,255,.12); }
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="game"></canvas>
+
+<div id="score">0</div>
+<div id="banner"></div>
+<div id="chip"></div>
+
+<button id="gear" aria-label="Settings">⚙️</button>
+<div id="panel" class="hidden">
+  <h3>⚙️ Fruit speed</h3>
+  <label>🐢 <input id="speed" type="range" min="0.5" max="1.6" step="0.05"> 🐇</label>
+  <div id="roomSec">
+    <h3>👨‍👧 Play together</h3>
+    <input id="pname" maxlength="12" placeholder="Your name" autocomplete="off">
+    <input id="pcode" maxlength="12" placeholder="Room code (e.g. BANANA)" autocapitalize="characters" autocomplete="off">
+    <button id="joinBtn">🔗 Join room</button>
+    <div id="roomStatus"></div>
+  </div>
+  <button id="closePanel">Done ✔</button>
+</div>
+
+<div id="board"></div>
+
+<div id="start">
+  <div class="fruits">🍉🍓🍊</div>
+  <h1>Fruit Party!</h1>
+  <p>Wave your hand (or swipe a finger) to slice the fruit. No losing — just popping!</p>
+  <button id="btnCam" class="bigbtn">📷 Start (with camera)</button>
+  <button id="btnTouch" class="softbtn">👆 Play without camera</button>
+  <p class="tiny">The camera lets you slice by waving — video never leaves your device.</p>
+</div>
+
+<script>
+/* =====================================================================
+   🍉 FRUIT PARTY — a no-lose fruit slicing game for little kids.
+   Milestone 1: touch & mouse slicing. (Hand tracking arrives in M2.)
+   ===================================================================== */
+
+// ---------- tiny helpers ----------
+const $ = id => document.getElementById(id);
+const rand = (a, b) => a + Math.random() * (b - a);
+const canvas = $('game'), ctx = canvas.getContext('2d');
+const cam = $('cam');
+
+// ---------- canvas sizing (capped so mid-tier iPads keep their fps) ----------
+let W = 0, H = 0, DPR = 1, quality = 1;
+function resize() {
+  W = innerWidth; H = innerHeight;
+  let dpr = Math.min(devicePixelRatio || 1, 2);
+  dpr = Math.min(dpr, Math.sqrt(3.6e6 / (W * H))); // never exceed ~3.6M canvas pixels
+  DPR = Math.max(1, dpr * quality);
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+resize();
+addEventListener('resize', resize);
+addEventListener('orientationchange', () => setTimeout(resize, 300)); // iOS reports sizes late
+if (window.visualViewport) visualViewport.addEventListener('resize', resize);
+
+// ---------- settings (one slider: fruit speed, saved between visits) ----------
+let speedMul = 0.8; // gentle default for small kids
+try { speedMul = parseFloat(localStorage.getItem('fp_speed')) || 0.8; } catch (e) {}
+$('speed').value = speedMul;
+$('speed').addEventListener('input', e => {
+  speedMul = parseFloat(e.target.value);
+  try { localStorage.setItem('fp_speed', speedMul); } catch (err) {}
+});
+$('gear').addEventListener('click', () => $('panel').classList.toggle('hidden'));
+$('closePanel').addEventListener('click', () => $('panel').classList.add('hidden'));
+
+// ---------- sounds: tiny synthesized WebAudio, no files needed ----------
+// iOS rule: an AudioContext only makes sound after being created/resumed
+// inside a real user tap, so initAudio() runs in every button/touch handler.
+let AC = null;
+function initAudio() {
+  try {
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === 'suspended') AC.resume();
+  } catch (e) {}
+}
+function tone(f0, f1, dur, type, vol, delay) {
+  if (!AC) return;
+  const t = AC.currentTime + (delay || 0);
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type || 'sine';
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), t + dur);
+  g.gain.setValueAtTime(vol || .4, t);
+  g.gain.exponentialRampToValueAtTime(.001, t + dur);
+  o.connect(g).connect(AC.destination);
+  o.start(t); o.stop(t + dur + .05);
+}
+function playPop(pitchUp) {
+  if (!AC) return;
+  tone(rand(400, 520) * (pitchUp || 1), 90, .16, 'square', .3);
+  // a short burst of filtered noise = the juicy "splat"
+  const len = Math.floor(AC.sampleRate * .07);
+  const buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = AC.createBufferSource(); src.buffer = buf;
+  const f = AC.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1400; f.Q.value = .9;
+  const g = AC.createGain(); g.gain.value = .45;
+  src.connect(f); f.connect(g); g.connect(AC.destination);
+  src.start();
+}
+function playCheer() {
+  [523, 659, 784, 1047].forEach((fq, i) => tone(fq, fq, .25, 'triangle', .3, i * .09));
+  tone(1568, 2093, .35, 'sine', .2, .42);
+}
+
+// ---------- game state ----------
+const FRUITS = [
+  { e:'🍉', c:'#ff4f6b' }, { e:'🍊', c:'#ffa334' }, { e:'🍋', c:'#ffe14f' },
+  { e:'🍎', c:'#ff5050' }, { e:'🍇', c:'#b86bff' }, { e:'🍓', c:'#ff5b7f' },
+  { e:'🥝', c:'#9adb4f' }, { e:'🍌', c:'#ffe793' }, { e:'🍑', c:'#ffb38a' },
+  { e:'🍍', c:'#ffd54f' },
+];
+let fruits = [], pieces = [], particles = [];
+let score = 0, running = false, nextSpawn = 0, MAXF = 6;
+
+function fruitSize() { // at least 120px, a bit bigger on large screens
+  return Math.max(120, Math.min(150, Math.min(W, H) * 0.18));
+}
+
+// Launch a fruit from below the screen on a slow, floaty arc.
+// We pick where the arc should peak and how long it should take,
+// then derive launch speed + gravity from those (vy = -2h/T, g = 2h/T²).
+function spawn() {
+  const size = fruitSize(), r = size / 2;
+  const kind = FRUITS[Math.floor(Math.random() * FRUITS.length)];
+  const T = rand(1.9, 2.6) / speedMul;                 // seconds to reach the top of the arc
+  const h = rand(0.45, 0.8) * (H - size);              // how high it floats
+  fruits.push({
+    e: kind.e, c: kind.c, size, r,
+    x: rand(0.15, 0.85) * W, y: H + r,
+    vx: rand(-40, 40), vy: -2 * h / T, g: 2 * h / (T * T),
+    rot: rand(-.4, .4), spin: rand(-1.2, 1.2),
+  });
+  tone(180, 320, .18, 'sine', .07); // quiet "boop" as each fruit floats in
+}
+
+// ---------- slicing: blade trails + collision ----------
+// Every input source gets its own trail: each touching finger, the mouse,
+// and (in M2) each tracked hand. A trail is just the last ~0.3s of points.
+const TRAIL_MS = 280;
+const trails = new Map();
+let hueSeed = 0;
+
+function addTrailPoint(key, x, y) {
+  let tr = trails.get(key);
+  if (!tr) { tr = { pts: [], hue: (hueSeed += 77) % 360 }; trails.set(key, tr); }
+  const prev = tr.pts[tr.pts.length - 1];
+  tr.pts.push({ x, y, t: performance.now() });
+  if (tr.pts.length > 40) tr.pts.shift();
+  if (!running) return;
+  // Collision is checked on the SEGMENT between the last two points, so a
+  // fast swipe can't tunnel through a fruit between frames...
+  if (prev) checkSlice(prev.x, prev.y, x, y);
+  // ...and also on the newest point alone, so a fruit drifting into a
+  // resting fingertip still pops (perfect for 2-year-olds).
+  pointCheck(x, y);
+}
+
+// Classic point-to-segment distance: project P onto AB, clamp, measure.
+function segPointDist(ax, ay, bx, by, px, py) {
+  const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+  const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+  return Math.hypot(ax + t * dx - px, ay + t * dy - py);
+}
+function checkSlice(x1, y1, x2, y2) {
+  for (let i = fruits.length - 1; i >= 0; i--) {
+    const f = fruits[i];
+    if (segPointDist(x1, y1, x2, y2, f.x, f.y) < f.r + 8)
+      sliceFruit(i, Math.atan2(y2 - y1, x2 - x1));
+  }
+}
+function pointCheck(x, y) {
+  for (let i = fruits.length - 1; i >= 0; i--) {
+    const f = fruits[i];
+    if (Math.hypot(f.x - x, f.y - y) < f.r + 10) sliceFruit(i, rand(0, Math.PI));
+  }
+}
+
+// combo: quick consecutive slices raise the pop pitch — very satisfying
+let comboN = 0, comboT = 0;
+let onScoreChange = () => {}; // the optional shared room hooks in here
+
+function sliceFruit(i, ang) {
+  const f = fruits[i];
+  fruits.splice(i, 1);
+  score++;
+  const el = $('score');
+  el.textContent = score;
+  el.classList.add('bump');
+  setTimeout(() => el.classList.remove('bump'), 130);
+
+  const now = performance.now();
+  comboN = (now - comboT < 1200) ? comboN + 1 : 0;
+  comboT = now;
+  playPop(Math.pow(1.06, Math.min(comboN, 8)));
+
+  // two emoji halves fly apart perpendicular to the swipe direction
+  for (const dir of [-1, 1]) {
+    const px = Math.cos(ang + Math.PI / 2) * dir, py = Math.sin(ang + Math.PI / 2) * dir;
+    pieces.push({
+      e: f.e, x: f.x, y: f.y, size: f.size, cut: ang, dir, rot: f.rot,
+      vx: f.vx + px * 150 + rand(-30, 30),
+      vy: Math.min(f.vy, 0) * .3 + py * 150 - 60,
+      spin: dir * rand(1.5, 3.5), life: 1,
+    });
+  }
+  juice(f.x, f.y, f.c);
+  if (score % 10 === 0) celebrate();
+  onScoreChange();
+}
+
+function juice(x, y, color) {
+  if (particles.length > 380) particles.splice(0, 60); // hard cap, keeps old iPads smooth
+  particles.push({ type:'ring', x, y, r: 12, color, life: .45, max: .45 });
+  for (let i = 0; i < 16; i++) {
+    const a = rand(0, Math.PI * 2), sp = rand(120, 420);
+    particles.push({ type:'drop', x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 80,
+                     r: rand(4, 11), color, life: rand(.5, .9) });
+  }
+}
+
+const PRAISE = ['YAY!', 'WOW!', 'SUPER!', 'GREAT!', 'AMAZING!', 'WOOHOO!'];
+function celebrate() {
+  const b = $('banner');
+  b.textContent = '🎉 ' + PRAISE[(score / 10 - 1) % PRAISE.length] + ' ' + score + ' 🎉';
+  b.classList.add('show');
+  setTimeout(() => b.classList.remove('show'), 1600);
+  playCheer();
+  if (particles.length > 330) particles.splice(0, 110);
+  for (let i = 0; i < 70; i++)
+    particles.push({ type:'conf', x: rand(0, W), y: rand(-80, -10), vx: rand(-60, 60),
+                     vy: rand(90, 230), r: rand(5, 9), hue: rand(0, 360),
+                     rot: rand(0, 6.3), spin: rand(-6, 6), life: rand(1.6, 2.4) });
+}
+
+// ---------- physics + drawing ----------
+function update(dt, now) {
+  if (now > nextSpawn && fruits.length < MAXF) {
+    spawn();
+    nextSpawn = now + rand(1100, 1800) / speedMul;
+  }
+  for (let i = fruits.length - 1; i >= 0; i--) {
+    const f = fruits[i];
+    f.vy += f.g * dt; f.x += f.vx * dt; f.y += f.vy * dt; f.rot += f.spin * dt;
+    if (f.x < f.r || f.x > W - f.r) f.vx *= -1;          // bounce off side walls
+    if (f.y > H + f.size * 2 && f.vy > 0) fruits.splice(i, 1); // drifted away — no penalty
+  }
+  for (let i = pieces.length - 1; i >= 0; i--) {
+    const p = pieces[i];
+    p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    p.rot += p.spin * dt; p.life -= dt * .9;
+    if (p.life <= 0 || p.y > H + 300) pieces.splice(i, 1);
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.type === 'drop') { p.vy += 1100 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+    else if (p.type === 'conf') { p.vy += 140 * dt; p.x += (p.vx + Math.sin(p.life * 5) * 40) * dt; p.y += p.vy * dt; p.rot += p.spin * dt; }
+    else if (p.type === 'ring') p.r += 320 * dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawEmoji(e, size) {
+  ctx.font = size + 'px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(e, 0, 0);
+}
+
+function draw(now) {
+  ctx.clearRect(0, 0, W, H); // transparent canvas — camera video shows through
+
+  for (const f of fruits) {
+    ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(f.rot);
+    drawEmoji(f.e, f.size);
+    ctx.restore();
+  }
+
+  // sliced halves: clip to one side of the cut line, then draw the emoji
+  for (const p of pieces) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, p.life * 2);
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.cut); // local x-axis now lies along the cut
+    ctx.beginPath();
+    ctx.rect(-p.size, p.dir < 0 ? -p.size : 0, p.size * 2, p.size);
+    ctx.clip();
+    ctx.rotate(p.rot - p.cut);
+    drawEmoji(p.e, p.size);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+
+  for (const p of particles) {
+    if (p.type === 'drop') {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life / .6));
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+    } else if (p.type === 'conf') {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+      ctx.fillStyle = 'hsl(' + p.hue + ',95%,60%)';
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillRect(-p.r, -p.r * .6, p.r * 2, p.r * 1.2); ctx.restore();
+    } else { // expanding pop ring
+      ctx.globalAlpha = Math.max(0, p.life / p.max) * .8;
+      ctx.strokeStyle = p.color; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // blade trails: three strokes (wide glow, bright core, white center)
+  for (const [k, tr] of trails) {
+    tr.pts = tr.pts.filter(p => now - p.t < TRAIL_MS);
+    if (tr.pts.length < 2) { if (!tr.pts.length) trails.delete(k); continue; }
+    const hue = (tr.hue + now * .06) % 360;
+    ctx.lineCap = ctx.lineJoin = 'round';
+    for (const [wd, col] of [[26, 'hsla(' + hue + ',90%,60%,.3)'],
+                             [11, 'hsl(' + hue + ',95%,65%)'],
+                             [4, 'rgba(255,255,255,.9)']]) {
+      ctx.lineWidth = wd; ctx.strokeStyle = col;
+      ctx.beginPath();
+      ctx.moveTo(tr.pts[0].x, tr.pts[0].y);
+      for (let i = 1; i < tr.pts.length; i++) ctx.lineTo(tr.pts[i].x, tr.pts[i].y);
+      ctx.stroke();
+    }
+  }
+}
+
+// auto-quality: if fps sags on a weak device, render at lower resolution
+let frames = 0, fpsT = performance.now(), qSteps = 0;
+function perfGuard(now) {
+  frames++;
+  if (now - fpsT < 2000) return;
+  const fps = frames * 1000 / (now - fpsT);
+  frames = 0; fpsT = now;
+  if (fps < 24 && qSteps < 2) { qSteps++; quality *= .78; resize(); }
+  else if (fps < 20) MAXF = 4;
+}
+
+let last = performance.now();
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - last) / 1000, .05);
+  last = now;
+  if (running) { update(dt, now); detectHands(now); }
+  draw(now);
+  perfGuard(now);
+}
+requestAnimationFrame(loop);
+document.addEventListener('visibilitychange', () => { last = performance.now(); });
+
+// ---------- touch & mouse input (always on — works alongside hands) ----------
+canvas.addEventListener('pointerdown', e => {
+  initAudio();
+  addTrailPoint('p' + e.pointerId, e.clientX, e.clientY);
+});
+canvas.addEventListener('pointermove', e => {
+  // touches only report moves while touching; mouse slices just by moving
+  addTrailPoint('p' + e.pointerId, e.clientX, e.clientY);
+});
+// block iOS double-tap zoom / long-press magnifier
+canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------- chip = friendly status message ----------
+let chipTimer = 0;
+function showChip(msg, ms) {
+  const c = $('chip');
+  c.textContent = msg;
+  c.style.opacity = 1;
+  clearTimeout(chipTimer);
+  chipTimer = setTimeout(() => c.style.opacity = 0, ms || 3000);
+}
+
+/* =====================================================================
+   📷 CAMERA + ✋ HAND TRACKING (Milestone 2)
+
+   The game never waits for any of this: it is already playable by touch.
+   Ladder of fallbacks, friendliest message at each rung:
+     camera denied/missing  -> play on, pretty gradient background
+     MediaPipe fails to load -> play on, camera as background, touch slices
+     tracking too slow       -> switch itself off, touch slices
+   ===================================================================== */
+const VISION_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+const WASM_CDN   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODEL_URL  = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+let camOn = false, handsOK = false, landmarker = null, handsStatus = 'off';
+
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showChip('Camera needs a secure (https) page — touch to slice! 👆', 6000);
+    return false;
+  }
+  try {
+    // 640x480 is plenty for hand tracking and easy on a mid-tier iPad GPU
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    cam.srcObject = stream;
+    try { await cam.play(); } catch (e) {} // muted+playsinline video autoplays anyway
+    cam.style.display = 'block';
+    camOn = true;
+    return true;
+  } catch (err) {
+    showChip(err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')
+      ? "That's OK — camera is off! Swipe with your finger to slice 🍉"
+      : 'No camera found — touch to slice! 👆', 6000);
+    return false;
+  }
+}
+
+const withTimeout = (p, ms) =>
+  Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+
+async function startHands() {
+  handsStatus = 'loading';
+  showChip('✨ Loading hand magic… you can slice by touch meanwhile!', 30000);
+  try {
+    const vision = await withTimeout(import(VISION_CDN), 20000);
+    const files = await withTimeout(vision.FilesetResolver.forVisionTasks(WASM_CDN), 20000);
+    for (const delegate of ['GPU', 'CPU']) { // try the fast path first, then plain wasm
+      try {
+        landmarker = await withTimeout(vision.HandLandmarker.createFromOptions(files, {
+          baseOptions: { modelAssetPath: MODEL_URL, delegate },
+          runningMode: 'VIDEO',
+          numHands: 2, // two hands = two blades (or one hand each for two kids)
+        }), 25000);
+        break;
+      } catch (e) { landmarker = null; }
+    }
+    if (!landmarker) throw new Error('no delegate worked');
+    handsOK = true; handsStatus = 'on';
+    showChip('✋ Wave your hand to slice!', 4000);
+  } catch (e) {
+    handsStatus = 'failed';
+    showChip('Hand tracking unavailable — touch to slice! 👆', 5000);
+  }
+}
+function disableHands(msg) { handsOK = false; handsStatus = 'failed'; showChip(msg, 5000); }
+
+// The camera frame and the screen rarely share an aspect ratio. The video is
+// drawn with CSS object-fit:cover (fill the screen, crop the overflow), so we
+// reproduce that math to map a normalized landmark (0..1 in the camera frame)
+// onto screen pixels. X is also flipped because the video is mirrored.
+function videoToScreen(nx, ny) {
+  const vw = cam.videoWidth || 640, vh = cam.videoHeight || 480;
+  const s = Math.max(W / vw, H / vh);
+  const dw = vw * s, dh = vh * s, ox = (W - dw) / 2, oy = (H - dh) / 2;
+  return { x: (1 - nx) * dw + ox, y: ny * dh + oy };
+}
+
+// Detection runs at ~15Hz (not every frame) to keep iPads at full speed; the
+// blade glides toward the newest fingertip position every frame, so trails
+// stay silky even between detections. If detection is slow we first halve
+// its rate, and only then give up and switch to touch.
+let detEvery = 66, lastDet = 0, detTimes = [], handTargets = [];
+const handSmooth = new Map();
+
+function detectHands(now) {
+  if (!handsOK || cam.readyState < 2) return;
+  if (now - lastDet >= detEvery) {
+    lastDet = now;
+    const t0 = performance.now();
+    let res;
+    try { res = landmarker.detectForVideo(cam, now); }
+    catch (e) { disableHands('Hand tracking hiccup — touch to slice! 👆'); return; }
+    detTimes.push(performance.now() - t0);
+    if (detTimes.length >= 30) {
+      const avg = detTimes.reduce((a, b) => a + b, 0) / detTimes.length;
+      detTimes = [];
+      if (avg > 140) { disableHands('This device prefers touch — swipe away! 👆'); return; }
+      if (avg > 70) detEvery = 120;
+    }
+    const used = {};
+    handTargets = (res.landmarks || []).map((lms, i) => {
+      // landmark 8 = tip of the index finger
+      const p = videoToScreen(lms[8].x, lms[8].y);
+      let key = res.handednesses && res.handednesses[i] && res.handednesses[i][0]
+        ? res.handednesses[i][0].categoryName : 'H' + i;
+      if (used[key]) key += i; // two kids can both show a "Right" hand
+      used[key] = 1;
+      return { key: 'hand' + key, x: p.x, y: p.y };
+    });
+  }
+  for (const t of handTargets) {
+    let s = handSmooth.get(t.key);
+    if (!s) { s = { x: t.x, y: t.y }; handSmooth.set(t.key, s); }
+    s.x += (t.x - s.x) * .45;
+    s.y += (t.y - s.y) * .45;
+    s.seen = now;
+    addTrailPoint(t.key, s.x, s.y);
+  }
+  for (const [k, s] of handSmooth) if (now - s.seen > 400) handSmooth.delete(k);
+}
+
+// ---------- start ----------
+function startGame() {
+  if (running) return;
+  $('start').classList.add('hidden');
+  $('gear').style.display = 'block';
+  running = true;
+  spawn();
+  nextSpawn = performance.now() + 700;
+  showChip('Slice the fruit! 🍉', 2500);
+  try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (e) {}
+}
+$('btnTouch').addEventListener('click', () => { initAudio(); startGame(); });
+$('btnCam').addEventListener('click', async () => {
+  initAudio();
+  startGame(); // playable immediately — camera and tracking attach when ready
+  if (await startCamera()) startHands();
+});
+
+/* =====================================================================
+   👨‍👧 OPTIONAL: PLAY TOGETHER — live scoreboard (Milestone 4)
+
+   Both devices type the same room code and see each other's name and
+   score. It rides on free public MQTT relays over secure WebSockets:
+   no account, no server, no API keys. Only what you see below is ever
+   sent: room code, a nickname, and the score. Use nicknames, and pick
+   a unique silly room code (strangers on the same code would see it).
+
+   The single-player game NEVER depends on this. The mqtt library is
+   only fetched when someone taps Join, and every failure just shows a
+   friendly status and leaves the game untouched.
+   Set ROOM_ENABLED = false to hide the feature completely.
+   ===================================================================== */
+const ROOM_ENABLED = true;
+const MQTT_CDN = 'https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js';
+const BROKERS = [ // tried in order until one connects
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://broker.hivemq.com:8884/mqtt',
+  'wss://test.mosquitto.org:8081',
+];
+const myId = Math.random().toString(36).slice(2, 8);
+let room = null;
+
+const esc = s => String(s).slice(0, 16).replace(/[&<>"']/g,
+  ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+
+function setRoomStatus(msg) { $('roomStatus').textContent = msg; }
+
+function renderBoard() {
+  const b = $('board');
+  if (!room) { b.innerHTML = ''; return; }
+  let html = '<div class="prow me">' + esc(room.name) + ' <b>' + score + '</b></div>';
+  for (const [pid, d] of room.peers)
+    if (pid !== room.id) html += '<div class="prow">' + esc(d.n || '?') + ' <b>' + (d.s | 0) + '</b></div>';
+  b.innerHTML = html;
+}
+
+function roomPublish() {
+  try {
+    if (room && room.client.connected)
+      room.client.publish(room.topic + room.id,
+        JSON.stringify({ n: room.name, s: score, t: Date.now() }), { retain: true });
+  } catch (e) {}
+}
+
+let lastPub = 0;
+onScoreChange = () => {
+  if (!room) return;
+  renderBoard(); // own row updates instantly
+  const n = Date.now();
+  if (n - lastPub > 600) { lastPub = n; roomPublish(); } // heartbeat covers the rest
+};
+
+function connectBroker(url, code, name) {
+  return new Promise((ok, bad) => {
+    const topic = 'fruitparty1/' + code + '/';
+    const client = mqtt.connect(url, {
+      connectTimeout: 6000, reconnectPeriod: 2000, clean: true,
+      // last-will: if we vanish, the relay clears our retained score
+      will: { topic: topic + myId, payload: '', retain: true },
+    });
+    let inited = false;
+    const fail = setTimeout(() => { if (!inited) { try { client.end(true); } catch (e) {} bad(new Error('timeout')); } }, 8000);
+    client.on('connect', () => {
+      if (inited) return; // reconnects land here too
+      inited = true;
+      clearTimeout(fail);
+      room = { client, code, id: myId, name, topic, peers: new Map() };
+      client.subscribe(topic + '+');
+      roomPublish();
+      room.hb = setInterval(roomPublish, 4000);            // keep-alive + score refresh
+      room.prune = setInterval(() => {                      // drop silent players
+        if (!room) return;
+        let changed = false;
+        for (const [pid, d] of room.peers)
+          if (Date.now() - (d.t || 0) > 15000) { room.peers.delete(pid); changed = true; }
+        if (changed) renderBoard();
+      }, 5000);
+      renderBoard();
+      ok();
+    });
+    client.on('message', (t, msg) => {
+      if (!room) return;
+      const pid = t.split('/').pop();
+      if (pid === room.id) return;
+      if (!msg || !msg.length) { room.peers.delete(pid); renderBoard(); return; }
+      try { room.peers.set(pid, JSON.parse(msg.toString())); renderBoard(); } catch (e) {}
+    });
+    client.on('error', () => { if (!inited) { clearTimeout(fail); try { client.end(true); } catch (e) {} bad(new Error('connect error')); } });
+  });
+}
+
+async function joinRoom() {
+  const name = ($('pname').value.trim() || 'Player').slice(0, 12);
+  const code = $('pcode').value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12);
+  if (!code) { setRoomStatus('Type a room code first — something silly like BANANA 🍌'); return; }
+  try { localStorage.setItem('fp_name', name); localStorage.setItem('fp_code', code); } catch (e) {}
+  $('joinBtn').disabled = true;
+  setRoomStatus('Connecting…');
+  if (!window.mqtt) { // fetch the library only now, never on page load
+    await new Promise(res => {
+      const s = document.createElement('script');
+      s.src = MQTT_CDN; s.onload = res; s.onerror = res;
+      setTimeout(res, 12000);
+      document.head.appendChild(s);
+    });
+  }
+  if (window.mqtt) {
+    for (const url of BROKERS) {
+      try {
+        await connectBroker(url, code, name);
+        setRoomStatus('In room ' + code + ' — scores are live! ✔');
+        $('joinBtn').textContent = '🚪 Leave room';
+        $('joinBtn').disabled = false;
+        return;
+      } catch (e) { /* try the next relay */ }
+    }
+  }
+  setRoomStatus('Room service unreachable right now — solo is just as fun! 🍉');
+  $('joinBtn').disabled = false;
+}
+
+function leaveRoom() {
+  if (!room) return;
+  clearInterval(room.hb); clearInterval(room.prune);
+  try {
+    room.client.publish(room.topic + room.id, '', { retain: true });
+    room.client.end(true);
+  } catch (e) {}
+  room = null;
+  renderBoard();
+  setRoomStatus('');
+  $('joinBtn').textContent = '🔗 Join room';
+}
+
+if (ROOM_ENABLED) {
+  try {
+    $('pname').value = localStorage.getItem('fp_name') || '';
+    $('pcode').value = localStorage.getItem('fp_code') || '';
+  } catch (e) {}
+  $('joinBtn').addEventListener('click', () => room ? leaveRoom() : joinRoom());
+} else {
+  $('roomSec').style.display = 'none';
+}
+
+// ---------- debug hooks for automated tests (harmless to leave in) ----------
+window.__game = {
+  get score() { return score; },
+  get fruits() { return fruits; },
+  get running() { return running; },
+  get camOn() { return camOn; },
+  get handsStatus() { return handsStatus; },
+  get room() { return room && { code: room.code, peers: [...room.peers.keys()], connected: room.client.connected }; },
+  videoToScreen,
+  spawnAt(x, y) { spawn(); const f = fruits[fruits.length - 1]; f.x = x; f.y = y; f.vx = f.vy = f.g = f.spin = 0; },
+  sliceAll() { while (fruits.length) sliceFruit(0, 0); },
+};
+</script>
+</body>
+</html>
