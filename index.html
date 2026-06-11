@@ -31,10 +31,23 @@
       text-shadow:0 6px 18px rgba(0,0,0,.55); pointer-events:none; z-index:11;
       opacity:0; transform:scale(.3); transition:opacity .25s, transform .35s cubic-bezier(.2,1.6,.4,1); }
   #banner.show { opacity:1; transform:scale(1); }
-  #chip { position:fixed; bottom:calc(env(safe-area-inset-bottom, 0px) + 12px); left:50%;
+  #chip { position:fixed; bottom:calc(env(safe-area-inset-bottom, 0px) + 64px); left:50%;
       transform:translateX(-50%); background:rgba(0,0,0,.5); color:#fff; padding:8px 18px;
       border-radius:999px; font-size:16px; max-width:92vw; text-align:center;
       pointer-events:none; opacity:0; transition:opacity .4s; z-index:12; }
+
+  /* live hand-tracking status pill: green = hand seen, yellow = looking, gray = touch */
+  #pill { position:fixed; bottom:calc(env(safe-area-inset-bottom, 0px) + 12px); left:12px;
+      padding:8px 16px; border-radius:999px; font-size:16px; font-weight:700; color:#fff;
+      z-index:12; pointer-events:none; transition:background .3s; }
+  #pill.p-green { background:rgba(27,158,84,.88); }
+  #pill.p-yellow { background:rgba(196,144,10,.92); }
+  #pill.p-gray { background:rgba(90,90,100,.85); }
+  #hint { position:fixed; top:20%; left:50%; transform:translateX(-50%); max-width:88vw;
+      background:rgba(0,0,0,.55); color:#ffe45e; font-size:min(6vw, 26px); font-weight:800;
+      padding:14px 22px; border-radius:18px; text-align:center; z-index:12;
+      pointer-events:none; opacity:0; transition:opacity .4s; }
+  #hint.show { opacity:1; }
 
   /* ---------- buttons & panels ---------- */
   button { font-family:inherit; cursor:pointer; }
@@ -62,6 +75,21 @@
       border-radius:999px; }
   #board .prow.me { background:rgba(33,192,99,.65); }
 
+  /* ---------- versus mode ---------- */
+  #vsBtn { width:100%; padding:12px; font-size:18px; font-weight:700; border:none;
+      border-radius:10px; background:linear-gradient(135deg,#ff5f6d,#ffa334); color:#fff;
+      margin:2px 0 8px; }
+  #vov { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
+      justify-content:center; gap:10px; z-index:15; pointer-events:none; text-align:center;
+      background:rgba(10,5,40,.35); padding:20px; }
+  #vov .v1 { font-size:min(8vw, 46px); font-weight:900; color:#fff;
+      text-shadow:0 4px 14px rgba(0,0,0,.6); }
+  #vov .v2 { font-size:min(30vw, 200px); font-weight:900; color:#ffe45e; line-height:1.05;
+      text-shadow:0 8px 24px rgba(0,0,0,.55); }
+  #vov .v3 { font-size:min(4.5vw, 20px); color:#fff; opacity:.85; }
+  #tbar { position:fixed; top:0; left:0; height:12px; width:100%; display:none; z-index:14;
+      background:linear-gradient(90deg,#21c063,#ffe14f); border-radius:0 8px 8px 0; }
+
   /* ---------- start screen ---------- */
   #start { position:fixed; inset:0; z-index:40; display:flex; flex-direction:column;
       align-items:center; justify-content:center; gap:18px; text-align:center; padding:24px;
@@ -87,6 +115,8 @@
 <div id="score">0</div>
 <div id="banner"></div>
 <div id="chip"></div>
+<div id="pill" class="hidden"></div>
+<div id="hint"></div>
 
 <button id="gear" aria-label="Settings">⚙️</button>
 <div id="panel" class="hidden">
@@ -97,12 +127,19 @@
     <input id="pname" maxlength="12" placeholder="Your name" autocomplete="off">
     <input id="pcode" maxlength="12" placeholder="Room code (e.g. BANANA)" autocapitalize="characters" autocomplete="off">
     <button id="joinBtn">🔗 Join room</button>
+    <button id="vsBtn" class="hidden">⚔️ Versus — take turns! (best of 3)</button>
     <div id="roomStatus"></div>
   </div>
   <button id="closePanel">Done ✔</button>
 </div>
 
 <div id="board"></div>
+<div id="vov" class="hidden">
+  <div class="v1"></div>
+  <div class="v2"></div>
+  <div class="v3"></div>
+</div>
+<div id="tbar"></div>
 
 <div id="start">
   <div class="fruits">🍉🍓🍊</div>
@@ -239,12 +276,15 @@ function addTrailPoint(key, x, y) {
   tr.pts.push({ x, y, t: performance.now() });
   if (tr.pts.length > 40) tr.pts.shift();
   if (!running) return;
+  // Hand blades get extra forgiveness: tracking runs at ~15Hz and a waving
+  // arm is not a stylus, so the hit radius is bigger than for touch.
+  const pad = key.startsWith('hand') ? 22 : 8;
   // Collision is checked on the SEGMENT between the last two points, so a
   // fast swipe can't tunnel through a fruit between frames...
-  if (prev) checkSlice(prev.x, prev.y, x, y);
+  if (prev) checkSlice(prev.x, prev.y, x, y, pad);
   // ...and also on the newest point alone, so a fruit drifting into a
   // resting fingertip still pops (perfect for 2-year-olds).
-  pointCheck(x, y);
+  pointCheck(x, y, pad + 2);
 }
 
 // Classic point-to-segment distance: project P onto AB, clamp, measure.
@@ -253,17 +293,17 @@ function segPointDist(ax, ay, bx, by, px, py) {
   const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
   return Math.hypot(ax + t * dx - px, ay + t * dy - py);
 }
-function checkSlice(x1, y1, x2, y2) {
+function checkSlice(x1, y1, x2, y2, pad) {
   for (let i = fruits.length - 1; i >= 0; i--) {
     const f = fruits[i];
-    if (segPointDist(x1, y1, x2, y2, f.x, f.y) < f.r + 8)
+    if (segPointDist(x1, y1, x2, y2, f.x, f.y) < f.r + pad)
       sliceFruit(i, Math.atan2(y2 - y1, x2 - x1));
   }
 }
-function pointCheck(x, y) {
+function pointCheck(x, y, pad) {
   for (let i = fruits.length - 1; i >= 0; i--) {
     const f = fruits[i];
-    if (Math.hypot(f.x - x, f.y - y) < f.r + 10) sliceFruit(i, rand(0, Math.PI));
+    if (Math.hypot(f.x - x, f.y - y) < f.r + pad) sliceFruit(i, rand(0, Math.PI));
   }
 }
 
@@ -296,7 +336,7 @@ function sliceFruit(i, ang) {
     });
   }
   juice(f.x, f.y, f.c);
-  if (score % 10 === 0) celebrate();
+  if (score % 10 === 0 && !versus) celebrate(); // versus has its own big moments
   onScoreChange();
 }
 
@@ -317,6 +357,9 @@ function celebrate() {
   b.classList.add('show');
   setTimeout(() => b.classList.remove('show'), 1600);
   playCheer();
+  confettiBurst();
+}
+function confettiBurst() {
   if (particles.length > 330) particles.splice(0, 110);
   for (let i = 0; i < 70; i++)
     particles.push({ type:'conf', x: rand(0, W), y: rand(-80, -10), vx: rand(-60, 60),
@@ -326,7 +369,9 @@ function celebrate() {
 
 // ---------- physics + drawing ----------
 function update(dt, now) {
-  if (now > nextSpawn && fruits.length < MAXF) {
+  // in a versus match, fruit only spawns during YOUR 30-second turn
+  const maySpawn = !versus || versus.playing;
+  if (maySpawn && now > nextSpawn && fruits.length < MAXF) {
     spawn();
     nextSpawn = now + rand(1100, 1800) / speedMul;
   }
@@ -417,6 +462,23 @@ function draw(now) {
       ctx.stroke();
     }
   }
+
+  // glowing fingertip markers — kids instantly see "that dot is my hand",
+  // even when the hand is holding still and there's no trail to look at
+  for (const [key, s] of handSmooth) {
+    const tr = trails.get(key);
+    const hue = tr ? (tr.hue + now * .06) % 360 : 140;
+    const pulse = 1 + Math.sin(now / 140) * .12;
+    ctx.globalAlpha = .35;
+    ctx.fillStyle = 'hsl(' + hue + ',95%,65%)';
+    ctx.beginPath(); ctx.arc(s.x, s.y, 34 * pulse, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'hsl(' + hue + ',95%,70%)';
+    ctx.beginPath(); ctx.arc(s.x, s.y, 22 * pulse, 0, 7); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.95)';
+    ctx.beginPath(); ctx.arc(s.x, s.y, 8, 0, 7); ctx.fill();
+  }
 }
 
 // auto-quality: if fps sags on a weak device, render at lower resolution
@@ -435,8 +497,9 @@ function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min((now - last) / 1000, .05);
   last = now;
-  if (running) { update(dt, now); detectHands(now); }
+  if (running) { update(dt, now); detectHands(now); versusTick(now); }
   draw(now);
+  updatePill(now);
   perfGuard(now);
 }
 requestAnimationFrame(loop);
@@ -507,31 +570,65 @@ async function startCamera() {
 const withTimeout = (p, ms) =>
   Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 
+let visionMod = null, visionFiles = null, currentDelegate = '', loadRetried = false;
+
+function makeLandmarker(delegate) {
+  return withTimeout(visionMod.HandLandmarker.createFromOptions(visionFiles, {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: 'VIDEO',
+    numHands: 2, // two hands = two blades (or one hand each for two kids)
+  }), 25000);
+}
+
 async function startHands() {
   handsStatus = 'loading';
   showChip('✨ Loading hand magic… you can slice by touch meanwhile!', 30000);
   try {
-    const vision = await withTimeout(import(VISION_CDN), 20000);
-    const files = await withTimeout(vision.FilesetResolver.forVisionTasks(WASM_CDN), 20000);
+    if (!visionMod) visionMod = await withTimeout(import(VISION_CDN), 20000);
+    if (!visionFiles) visionFiles = await withTimeout(visionMod.FilesetResolver.forVisionTasks(WASM_CDN), 20000);
     for (const delegate of ['GPU', 'CPU']) { // try the fast path first, then plain wasm
-      try {
-        landmarker = await withTimeout(vision.HandLandmarker.createFromOptions(files, {
-          baseOptions: { modelAssetPath: MODEL_URL, delegate },
-          runningMode: 'VIDEO',
-          numHands: 2, // two hands = two blades (or one hand each for two kids)
-        }), 25000);
-        break;
-      } catch (e) { landmarker = null; }
+      try { landmarker = await makeLandmarker(delegate); currentDelegate = delegate; break; }
+      catch (e) { landmarker = null; }
     }
     if (!landmarker) throw new Error('no delegate worked');
     handsOK = true; handsStatus = 'on';
+    detFails = 0;
+    lastHandSeen = performance.now(); // start the "show me your hand" clock now
     showChip('✋ Wave your hand to slice!', 4000);
   } catch (e) {
-    handsStatus = 'failed';
-    showChip('Hand tracking unavailable — touch to slice! 👆', 5000);
+    if (!loadRetried) { // flaky wifi on first visit: one more attempt in 5s
+      loadRetried = true;
+      showChip('Hand magic is taking a moment — retrying… touch works meanwhile! 👆', 6000);
+      setTimeout(startHands, 5000);
+    } else {
+      handsStatus = 'failed';
+      showChip('Hand tracking unavailable — touch to slice! 👆', 5000);
+    }
   }
 }
 function disableHands(msg) { handsOK = false; handsStatus = 'failed'; showChip(msg, 5000); }
+
+// If the GPU path misbehaves at runtime, rebuild the tracker on plain CPU
+// wasm once before giving up — slower, but far more compatible.
+let rebuilding = false;
+async function rebuildOnCPU(reason) {
+  if (rebuilding) return;
+  rebuilding = true;
+  handsOK = false; handsStatus = 'loading';
+  showChip(reason + ' — switching to compatible mode…', 5000);
+  try {
+    try { if (landmarker && landmarker.close) landmarker.close(); } catch (e) {}
+    landmarker = await makeLandmarker('CPU');
+    currentDelegate = 'CPU';
+    detFails = 0; detTimes = []; detEvery = 100; // CPU is slower; pace gently
+    handsOK = true; handsStatus = 'on';
+    lastHandSeen = performance.now();
+    showChip('✋ Hand tracking is back — wave away!', 3500);
+  } catch (e) {
+    disableHands('Hand tracking unavailable — touch to slice! 👆');
+  }
+  rebuilding = false;
+}
 
 // The camera frame and the screen rarely share an aspect ratio. The video is
 // drawn with CSS object-fit:cover (fill the screen, crop the overflow), so we
@@ -549,22 +646,40 @@ function videoToScreen(nx, ny) {
 // stay silky even between detections. If detection is slow we first halve
 // its rate, and only then give up and switch to touch.
 let detEvery = 66, lastDet = 0, detTimes = [], handTargets = [];
+let detFails = 0, lastHandSeen = 0;
 const handSmooth = new Map();
+let fedFrames = []; // test inlet: synthetic detection results ride the real pipeline
 
 function detectHands(now) {
-  if (!handsOK || cam.readyState < 2) return;
+  if (!handsOK || rebuilding) return;
+  if (!fedFrames.length && cam.readyState < 2) return;
   if (now - lastDet >= detEvery) {
     lastDet = now;
-    const t0 = performance.now();
     let res;
-    try { res = landmarker.detectForVideo(cam, now); }
-    catch (e) { disableHands('Hand tracking hiccup — touch to slice! 👆'); return; }
-    detTimes.push(performance.now() - t0);
-    if (detTimes.length >= 30) {
-      const avg = detTimes.reduce((a, b) => a + b, 0) / detTimes.length;
-      detTimes = [];
-      if (avg > 140) { disableHands('This device prefers touch — swipe away! 👆'); return; }
-      if (avg > 70) detEvery = 120;
+    if (fedFrames.length) {
+      res = fedFrames.shift(); // same mapping/smoothing/collision path as real frames
+    } else {
+      const t0 = performance.now();
+      try { res = landmarker.detectForVideo(cam, now); detFails = 0; }
+      catch (e) {
+        // one bad frame must not kill tracking: skip, retry, rebuild, only then give up
+        detFails++;
+        if (detFails < 3) return;
+        if (currentDelegate === 'GPU') rebuildOnCPU('Hand tracking hiccup');
+        else disableHands('Hand tracking hiccup — touch to slice! 👆');
+        return;
+      }
+      detTimes.push(performance.now() - t0);
+      if (detTimes.length >= 30) {
+        const avg = detTimes.reduce((a, b) => a + b, 0) / detTimes.length;
+        detTimes = [];
+        if (avg > 140) {
+          if (currentDelegate === 'GPU') rebuildOnCPU('Hand tracking is slow here');
+          else disableHands('This device prefers touch — swipe away! 👆');
+          return;
+        }
+        if (avg > 70) detEvery = 120;
+      }
     }
     const used = {};
     handTargets = (res.landmarks || []).map((lms, i) => {
@@ -576,6 +691,7 @@ function detectHands(now) {
       used[key] = 1;
       return { key: 'hand' + key, x: p.x, y: p.y };
     });
+    if (handTargets.length) lastHandSeen = now; // feeds the status pill
   }
   for (const t of handTargets) {
     let s = handSmooth.get(t.key);
@@ -586,6 +702,38 @@ function detectHands(now) {
     addTrailPoint(t.key, s.x, s.y);
   }
   for (const [k, s] of handSmooth) if (now - s.seen > 400) handSmooth.delete(k);
+}
+
+// ---------- live status pill + "I can't see your hand" hint ----------
+// Three states while the camera is on: green (hand in view right now),
+// yellow (tracking fine, hand out of view), gray (tracking off → touch).
+// This is the single biggest fix for "it feels broken": the game now SAYS
+// whether it can see a hand instead of leaving everyone guessing.
+let pillState = '', hintAt = 0;
+function updatePill(now) {
+  const pill = $('pill');
+  if (!running || !camOn) {
+    if (pillState) { pillState = ''; pill.className = 'hidden'; }
+    return;
+  }
+  let cls, txt;
+  if (handsStatus === 'loading') { cls = 'p-gray'; txt = '✨ Hand magic loading…'; }
+  else if (handsStatus !== 'on') { cls = 'p-gray'; txt = '👆 Touch mode'; }
+  else if (now - lastHandSeen < 1000) { cls = 'p-green'; txt = '✋ I see your hand!'; }
+  else { cls = 'p-yellow'; txt = '👋 Show me your hand'; }
+  if (cls + txt !== pillState) {
+    pillState = cls + txt;
+    pill.className = cls;
+    pill.textContent = txt;
+  }
+  // long spell with no hand in frame → say what to actually do about it
+  if (handsStatus === 'on' && now - lastHandSeen > 10000 && now - hintAt > 20000) {
+    hintAt = now;
+    const h = $('hint');
+    h.textContent = '👋 Step back so the camera can see your hand!';
+    h.classList.add('show');
+    setTimeout(() => h.classList.remove('show'), 4500);
+  }
 }
 
 // ---------- start ----------
@@ -627,7 +775,13 @@ const BROKERS = [ // tried in order until one connects
   'wss://broker.hivemq.com:8884/mqtt',
   'wss://test.mosquitto.org:8081',
 ];
-const myId = Math.random().toString(36).slice(2, 8);
+// a stable id lets a player reload mid-match and pick up where they left off
+let myId = '';
+try { myId = localStorage.getItem('fp_id') || ''; } catch (e) {}
+if (!myId) {
+  myId = Math.random().toString(36).slice(2, 8);
+  try { localStorage.setItem('fp_id', myId); } catch (e) {}
+}
 let room = null;
 
 const esc = s => String(s).slice(0, 16).replace(/[&<>"']/g,
@@ -637,7 +791,8 @@ function setRoomStatus(msg) { $('roomStatus').textContent = msg; }
 
 function renderBoard() {
   const b = $('board');
-  if (!room) { b.innerHTML = ''; return; }
+  updateVsBtn();
+  if (!room || versus) { b.innerHTML = ''; return; } // versus draws its own UI
   let html = '<div class="prow me">' + esc(room.name) + ' <b>' + score + '</b></div>';
   for (const [pid, d] of room.peers)
     if (pid !== room.id) html += '<div class="prow">' + esc(d.n || '?') + ' <b>' + (d.s | 0) + '</b></div>';
@@ -655,6 +810,12 @@ function roomPublish() {
 let lastPub = 0;
 onScoreChange = () => {
   if (!room) return;
+  if (versus && versus.playing) { // a slice during my versus turn
+    versus.turnScore++;
+    versus.ts[versus.myIdx] = versus.turnScore;
+    if (Date.now() - lastVPub > 500) { lastVPub = Date.now(); vPublish(); }
+    renderVersus();
+  }
   renderBoard(); // own row updates instantly
   const n = Date.now();
   if (n - lastPub > 600) { lastPub = n; roomPublish(); } // heartbeat covers the rest
@@ -677,12 +838,16 @@ function connectBroker(url, code, name) {
       room = { client, code, id: myId, name, topic, peers: new Map() };
       client.subscribe(topic + '+');
       roomPublish();
-      room.hb = setInterval(roomPublish, 4000);            // keep-alive + score refresh
+      room.hb = setInterval(() => {                         // keep-alive + score refresh
+        if (!room) return;
+        if (room.client.connected) roomPublish();
+        else if (!room.client.reconnecting) reJoin();       // see note on reJoin
+      }, 4000);
       room.prune = setInterval(() => {                      // drop silent players
         if (!room) return;
         let changed = false;
         for (const [pid, d] of room.peers)
-          if (Date.now() - (d.t || 0) > 15000) { room.peers.delete(pid); changed = true; }
+          if (Date.now() - (d.rx || 0) > 15000) { room.peers.delete(pid); changed = true; }
         if (changed) renderBoard();
       }, 5000);
       renderBoard();
@@ -691,9 +856,15 @@ function connectBroker(url, code, name) {
     client.on('message', (t, msg) => {
       if (!room) return;
       const pid = t.split('/').pop();
+      if (pid === '_versus') { onVersusMsg(msg); return; }
       if (pid === room.id) return;
       if (!msg || !msg.length) { room.peers.delete(pid); renderBoard(); return; }
-      try { room.peers.set(pid, JSON.parse(msg.toString())); renderBoard(); } catch (e) {}
+      try {
+        const d = JSON.parse(msg.toString());
+        d.rx = Date.now(); // stamp arrival by OUR clock — sender clocks can be off
+        room.peers.set(pid, d);
+        renderBoard();
+      } catch (e) {}
     });
     client.on('error', () => { if (!inited) { clearTimeout(fail); try { client.end(true); } catch (e) {} bad(new Error('connect error')); } });
   });
@@ -729,8 +900,36 @@ async function joinRoom() {
   $('joinBtn').disabled = false;
 }
 
+// Public relays sometimes kick a client with a CLEAN disconnect, which stops
+// mqtt.js's auto-reconnect for good — the room would die silently. The
+// heartbeat notices the dead client and quietly rebuilds the connection.
+let healing = false;
+async function reJoin() {
+  if (!room || healing) return;
+  healing = true;
+  setRoomStatus('Reconnecting…');
+  const name = room.name, code = room.code;
+  try { clearInterval(room.hb); clearInterval(room.prune); room.client.end(true); } catch (e) {}
+  room = null;
+  for (const url of BROKERS) {
+    try {
+      await connectBroker(url, code, name);
+      setRoomStatus('In room ' + code + ' — scores are live! ✔');
+      renderBoard();
+      healing = false;
+      return;
+    } catch (e) { /* next relay */ }
+  }
+  healing = false;
+  setRoomStatus('Lost the room connection — playing solo 🍉');
+  $('joinBtn').textContent = '🔗 Join room';
+  if (versus) exitVersus(false);
+  renderBoard();
+}
+
 function leaveRoom() {
   if (!room) return;
+  if (versus) exitVersus(true); // walk out of the match too
   clearInterval(room.hb); clearInterval(room.prune);
   try {
     room.client.publish(room.topic + room.id, '', { retain: true });
@@ -752,6 +951,244 @@ if (ROOM_ENABLED) {
   $('roomSec').style.display = 'none';
 }
 
+/* =====================================================================
+   ⚔️ VERSUS — turn-based two-player riding the same room (Milestone 2)
+
+   One parent taps "Versus" on one device; the other device joins in with
+   ZERO clicks. Players alternate 30s turns (the watcher sees the active
+   player's live score in giant text), 3 rounds, a star per round win,
+   most stars takes the match — and both screens celebrate at the end.
+
+   Protocol: one retained JSON blob on <room>/_versus (~200 bytes). Each
+   device is authoritative ONLY while it acts (its own countdown + turn),
+   so no clock sync is needed and 1-2s of relay latency is harmless.
+   Messages carry a sequence number; stale ones are dropped, simultaneous
+   starts tie-break on player id. If the active player vanishes, the
+   other side shows "waiting for <name>" (their round restarts when they
+   come back) and gives up kindly after a minute. None of this runs —
+   or can break anything — outside an explicitly started match.
+   ===================================================================== */
+let TURN_MS = 30000, COUNT_MS = 3000, BETWEEN_MS = 3500, OVER_MS = 6000,
+    STALE_MS = 12000, CANCEL_MS = 60000; // mutable so tests can shrink them
+let versus = null, vSeq = 0, vBy = '', lastVPub = 0;
+
+function bannerShow(txt, ms) {
+  const b = $('banner');
+  b.textContent = txt;
+  b.classList.add('show');
+  clearTimeout(bannerShow.t);
+  bannerShow.t = setTimeout(() => b.classList.remove('show'), ms);
+}
+
+function vPublish() {
+  if (!room || !versus) return;
+  vSeq++; vBy = myId;
+  const m = { v: 1, seq: vSeq, by: myId, st: versus.st, a: versus.a, r: versus.r,
+              w: versus.w, p: versus.p, ts: versus.ts, fin: versus.fin,
+              lw: versus.lw, lr: versus.lr, te: versus.st === 'over' ? Date.now() : 0 };
+  try { room.client.publish(room.topic + '_versus', JSON.stringify(m), { retain: true }); } catch (e) {}
+}
+
+function onVersusMsg(msg) {
+  if (!msg || !msg.length) { if (versus) exitVersus(false); return; } // match cleared
+  let d; try { d = JSON.parse(msg.toString()); } catch (e) { return; }
+  if (!d || d.v !== 1 || !Array.isArray(d.p) || d.p.length !== 2) return;
+  if (d.by === myId) { vSeq = Math.max(vSeq, d.seq); return; } // own echo
+  if (d.seq < vSeq) return;                                    // stale
+  if (d.seq === vSeq && !(d.by !== vBy && d.by < vBy)) return; // dup, or lost tie-break
+  if (d.st === 'over' && Date.now() - (d.te || 0) > 30000) return; // crusty old match
+  vSeq = d.seq; vBy = d.by;
+  applyVersus(d);
+}
+
+// a state someone else published becomes our local truth
+function applyVersus(d) {
+  const myIdx = d.p.findIndex(pl => pl.id === myId);
+  versus = { st: d.st, a: d.a, r: d.r, w: d.w, p: d.p, ts: d.ts || [null, null],
+             fin: d.fin, lw: d.lw, lr: d.lr, myIdx, turnScore: 0, waitSince: 0 };
+  $('panel').classList.add('hidden');
+  if (d.st === 'over') { showOver(); return; }
+  if (myIdx >= 0 && (d.st === 'count' || d.st === 'play') && d.a === myIdx) {
+    // my turn — also lands here when I reload mid-turn: the round restarts
+    startMyCountdown();
+  } else if (myIdx >= 0 && d.st === 'between' && d.a === myIdx) {
+    // round result is on screen; after the pause it's me again
+    setTimeout(() => {
+      if (versus && versus.st === 'between' && !versus.counting) startMyCountdown();
+    }, BETWEEN_MS);
+  }
+  renderVersus();
+  renderBoard();
+}
+
+function startMyCountdown() {
+  if (!versus || versus.counting || versus.playing) return;
+  versus.counting = true;
+  versus.st = 'count'; versus.a = versus.myIdx;
+  if (!versus.ts) versus.ts = [null, null];
+  vPublish();
+  renderVersus();
+  bannerShow('YOUR TURN, ' + versus.p[versus.myIdx].n + '! 🫵', 1100);
+  const step = Math.max(400, Math.floor(COUNT_MS / 3));
+  [3, 2, 1].forEach((d, i) => setTimeout(() => {
+    if (!versus || !versus.counting) return; // match changed under us
+    bannerShow(String(d), step * .8);
+    tone(440 + d * 70, 440 + d * 70, .12, 'square', .3);
+  }, 900 + i * step));
+  setTimeout(() => { if (versus && versus.counting) startMyTurn(); }, 900 + step * 3);
+}
+
+function startMyTurn() {
+  versus.counting = false; versus.playing = true;
+  versus.st = 'play'; versus.turnScore = 0;
+  versus.ts[versus.myIdx] = 0;
+  versus.turnEndAt = performance.now() + TURN_MS;
+  vPublish();
+  bannerShow('GO! 🍉', 900);
+  tone(660, 1320, .25, 'triangle', .4);
+  renderVersus();
+}
+
+function endMyTurn() {
+  if (!versus || !versus.playing) return;
+  versus.playing = false;
+  versus.ts[versus.myIdx] = versus.turnScore || 0;
+  tone(700, 240, .4, 'triangle', .35);
+  const other = 1 - versus.myIdx;
+  if (versus.ts[other] == null) {
+    // other player still owes a turn this round — hand them the controls
+    versus.st = 'count'; versus.a = other;
+    vPublish();
+    renderVersus();
+  } else {
+    // round complete: hand out a star (a tie gives one to each — toddlers)
+    versus.lr = versus.r;
+    versus.lw = versus.ts[0] === versus.ts[1] ? -1 : (versus.ts[0] > versus.ts[1] ? 0 : 1);
+    if (versus.lw === -1) { versus.w[0]++; versus.w[1]++; } else versus.w[versus.lw]++;
+    if (versus.r >= 3) {
+      versus.st = 'over'; versus.a = -1;
+      versus.fin = versus.w[0] === versus.w[1] ? -1 : (versus.w[0] > versus.w[1] ? 0 : 1);
+      vPublish();
+      showOver();
+    } else {
+      versus.r++; versus.ts = [null, null];
+      versus.st = 'between'; versus.a = 0; // challenger opens every round
+      vPublish();
+      renderVersus();
+      if (versus.myIdx === 0) setTimeout(() => {
+        if (versus && versus.st === 'between' && !versus.counting) startMyCountdown();
+      }, BETWEEN_MS);
+    }
+  }
+}
+
+function showOver() {
+  const f = versus.fin;
+  const mine = f === versus.myIdx;
+  bannerShow(f === -1 ? '🏆 You BOTH win! 🏆'
+    : mine ? '🏆 ' + versus.p[f].n + ' wins! 🏆'
+           : '🌟 Great game! ' + versus.p[f].n + ' wins 🌟', OVER_MS - 500);
+  playCheer(); setTimeout(playCheer, 700);
+  for (let k = 0; k < 3; k++) setTimeout(confettiBurst, k * 800);
+  renderVersus();
+  setTimeout(() => { if (versus && versus.st === 'over') exitVersus(versus.myIdx === 0); }, OVER_MS);
+}
+
+function exitVersus(clearRetained) {
+  if (clearRetained && room) {
+    try { room.client.publish(room.topic + '_versus', '', { retain: true }); } catch (e) {}
+  }
+  versus = null;
+  $('vov').classList.add('hidden');
+  $('tbar').style.display = 'none';
+  const s = $('score'); s.style.display = ''; s.textContent = score;
+  renderBoard();
+}
+
+function cancelVersus() {
+  bannerShow("We'll play again soon! 💛", 3000);
+  exitVersus(true);
+}
+
+// runs every frame from the main loop; inert unless a match is active
+function versusTick(now) {
+  if (!versus) return;
+  if (versus.playing) {
+    const left = versus.turnEndAt - now;
+    $('tbar').style.width = Math.max(0, left / TURN_MS * 100) + '%';
+    if (Date.now() - lastVPub > 2000) { lastVPub = Date.now(); vPublish(); } // live score for the watcher
+    if (left <= 0) endMyTurn();
+    return;
+  }
+  if (versus.counting || versus.st === 'over') return;
+  // someone else should be acting — are they still with us?
+  const actor = versus.p[versus.a];
+  if (!actor || actor.id === myId) return;
+  const pr = room && room.peers.get(actor.id);
+  const fresh = pr && Date.now() - (pr.rx || 0) < STALE_MS;
+  if (!fresh) {
+    if (!versus.waitSince) { versus.waitSince = now; renderVersus(); }
+    else if (now - versus.waitSince > CANCEL_MS) {
+      versus.myIdx >= 0 ? cancelVersus() : exitVersus(false);
+    }
+  } else if (versus.waitSince) {
+    versus.waitSince = 0;
+    renderVersus(); // they're back — their device re-reads the match and resumes
+  }
+}
+
+function renderVersus() {
+  if (!versus) return;
+  const vov = $('vov');
+  if (versus.playing) { // my turn: top number = THIS turn's score, bar = time left
+    $('score').style.display = '';
+    $('score').textContent = versus.turnScore;
+    $('tbar').style.display = 'block';
+    vov.classList.add('hidden');
+    return;
+  }
+  $('tbar').style.display = 'none';
+  $('score').style.display = 'none';
+  if (versus.counting) { vov.classList.add('hidden'); return; } // banner digits own the screen
+  const stars = i => '⭐'.repeat(versus.w[i]) || '—';
+  let t1 = '', t2 = '';
+  if (versus.waitSince) {
+    t1 = '💤 Waiting for ' + versus.p[versus.a].n + '…'; t2 = '';
+  } else if (versus.st === 'count') {
+    t1 = 'Get ready — ' + versus.p[versus.a].n + "'s turn!"; t2 = '✨';
+  } else if (versus.st === 'play') {
+    t1 = '👀 ' + versus.p[versus.a].n + "'s turn!";
+    t2 = String((versus.ts && versus.ts[versus.a]) || 0);
+  } else if (versus.st === 'between') {
+    t1 = versus.lw === -1 ? 'Round ' + versus.lr + ' is a tie!'
+                          : versus.p[versus.lw].n + ' wins round ' + versus.lr + '!';
+    t2 = '⭐';
+  } else if (versus.st === 'over') {
+    t1 = versus.fin === -1 ? 'You BOTH win!' : versus.p[versus.fin].n + ' wins!';
+    t2 = '🏆';
+  }
+  vov.querySelector('.v1').textContent = t1;
+  vov.querySelector('.v2').textContent = t2;
+  vov.querySelector('.v3').textContent = 'Round ' + Math.min(versus.r, 3) + ' of 3 — ' +
+    versus.p[0].n + ' ' + stars(0) + '  •  ' + versus.p[1].n + ' ' + stars(1);
+  vov.classList.remove('hidden');
+}
+
+function updateVsBtn() {
+  $('vsBtn').classList.toggle('hidden', !(room && !versus && room.peers.size >= 1));
+}
+
+$('vsBtn').addEventListener('click', () => {
+  if (!room || versus) return;
+  const other = [...room.peers.entries()].find(([pid]) => pid !== room.id);
+  if (!other) return;
+  versus = { st: 'idle', a: 0, r: 1, w: [0, 0], ts: [null, null], fin: null,
+             p: [{ id: myId, n: room.name }, { id: other[0], n: (other[1].n || 'Friend').slice(0, 12) }],
+             myIdx: 0, turnScore: 0, waitSince: 0 };
+  $('panel').classList.add('hidden');
+  startMyCountdown(); // publishes; the other device joins with zero clicks
+});
+
 // ---------- debug hooks for automated tests (harmless to leave in) ----------
 window.__game = {
   get score() { return score; },
@@ -759,10 +1196,33 @@ window.__game = {
   get running() { return running; },
   get camOn() { return camOn; },
   get handsStatus() { return handsStatus; },
+  get delegate() { return currentDelegate; },
+  get landmarker() { return landmarker; },
+  get handSeen() { return performance.now() - lastHandSeen < 1000; },
+  get pill() { return { text: $('pill').textContent, cls: $('pill').className }; },
+  get markers() { return handSmooth.size; },
   get room() { return room && { code: room.code, peers: [...room.peers.keys()], connected: room.client.connected }; },
+  get versus() { return versus && { st: versus.st, a: versus.a, r: versus.r, w: [...versus.w],
+    ts: versus.ts && [...versus.ts], fin: versus.fin, myIdx: versus.myIdx,
+    playing: !!versus.playing, counting: !!versus.counting, waiting: !!versus.waitSince }; },
+  get vov() { const o = $('vov'); return { hidden: o.classList.contains('hidden'),
+    t1: o.querySelector('.v1').textContent, t2: o.querySelector('.v2').textContent,
+    t3: o.querySelector('.v3').textContent }; },
+  setVersusTiming(turn, count, between, stale, over, cancel) {
+    TURN_MS = turn; COUNT_MS = count; BETWEEN_MS = between;
+    if (stale) STALE_MS = stale; if (over) OVER_MS = over; if (cancel) CANCEL_MS = cancel;
+  },
   videoToScreen,
   spawnAt(x, y) { spawn(); const f = fruits[fruits.length - 1]; f.x = x; f.y = y; f.vx = f.vy = f.g = f.spin = 0; },
   sliceAll() { while (fruits.length) sliceFruit(0, 0); },
+  // feed synthetic index-fingertip positions ([nx,ny] in camera coords, null =
+  // empty frame) through the REAL detection pipeline, one per detection tick
+  feedLandmarks(frames) {
+    fedFrames.push(...frames.map(f => f ? {
+      landmarks: [Array.from({ length: 21 }, () => ({ x: f[0], y: f[1], z: 0 }))],
+      handednesses: [[{ categoryName: 'Right' }]],
+    } : { landmarks: [], handednesses: [] }));
+  },
 };
 </script>
 </body>

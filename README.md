@@ -31,15 +31,26 @@ file in, get an HTTPS URL.
 First load needs internet (the hand-tracking model, ~8 MB, comes from a CDN — it's cached
 after that). Sound starts after the first tap — that's an iOS rule, the Start button counts.
 
+### The colored pill (bottom-left) tells you what the camera sees
+
+| Pill | Meaning |
+|---|---|
+| 🟢 **✋ I see your hand!** | Tracking is working — a glowing dot follows your fingertip. |
+| 🟡 **👋 Show me your hand** | Tracking is fine, but your hand isn't in the picture. Usually it's resting on the mouse/table, below the camera's view. Step back or lift your hand. |
+| ⚪ **👆 Touch mode** | Hand tracking is off (couldn't load, or this device is too slow) — touching the screen always works. |
+
+If no hand is seen for a while, the game says it outright: *"Step back so the
+camera can see your hand!"*
+
 ### If something is off
 
 | Symptom | Fix |
 |---|---|
+| Pill stays yellow | Your hand is out of frame — camera probably sees only your head and shoulders. Step back, or angle the camera down, then wave at chest height. |
 | Camera prompt never appears / always denied | iPad **Settings → Apps → Safari → Camera → Ask/Allow**, then reload. Or in Safari tap **aA → Website Settings → Camera → Allow**. |
 | "Camera needs a secure (https) page" | You opened it via `http://` or a file. Use the GitHub Pages `https://` URL. |
 | No sound | Tap the screen once; check the side switch / volume; iPad Silent mode mutes it. |
-| Hands feel laggy | The game lowers its own tracking rate and resolution first, and if the device truly can't keep up it switches to touch by itself. Touch always works. |
-| Hand not detected | Sit about an arm's length away, palm facing the camera, decent light. |
+| Hands feel laggy | The game lowers its own tracking rate first, then rebuilds the tracker in a compatible mode, and only then switches to touch — the pill always shows where it landed. |
 
 ## Desktop
 
@@ -60,9 +71,30 @@ but it's shared public infrastructure:
 - Pick a **unique silly code** (`BANANA-MOON-42`), since anyone using the same code lands
   in the same room.
 - If the relay is down, the game says so and plays on solo — multiplayer can never break
-  the game.
+  the game. If the relay quietly drops the connection mid-game, the room rebuilds it by
+  itself within a few seconds.
 - To remove the feature entirely, set `ROOM_ENABLED = false` near the bottom of
   [index.html](index.html).
+
+## Playing Versus mode (take turns, best of 3)
+
+Made for a parent on one device and a kid (with a helper) on the other:
+
+1. Both devices join the **same room code** (see above).
+2. On **one** device, open ⚙️ and tap **⚔️ Versus — take turns!**. That's the last
+   button anyone needs to press.
+3. From here it runs itself: the device that tapped goes first — big **"YOUR TURN!"**,
+   a 3-2-1 countdown, then 30 seconds of slicing while a time bar shrinks across the top.
+   The other device watches that player's name and score climb in giant letters.
+4. Turns flip automatically. A round = one turn each; whoever slices more gets a ⭐
+   (a tie gives one to each). Three rounds, most stars wins, and **both** screens get a
+   confetti party — the other player sees a "Great game!" message, never a "you lost."
+5. If someone's device drops out mid-round, the other screen shows
+   *"💤 Waiting for …"* — the round restarts when they return, and after a minute the
+   game gives up gracefully and goes back to free play.
+
+Notes: kids never need to tap anything once the room is joined. If a third device is in
+the room, the match pairs the tapper with the first other player; everyone else watches.
 
 ## Settings
 
@@ -86,9 +118,17 @@ All in [index.html](index.html), top to bottom:
   fingertip. Detection runs at ~15 Hz, and the blade glides toward the newest fingertip
   every frame, so the trail stays smooth between detections. Coordinates are mapped
   through the same object-fit:cover math the video uses, with X flipped for mirroring.
-- **Fallback ladder** — camera denied → gradient background + touch; MediaPipe fails or
-  times out → camera background + touch; detection averaging too slow → halves its rate,
-  then disables itself. Touch/mouse slicing is always on, so the game is never broken.
+  A glowing dot marks every detected fingertip, and the status pill reports live whether
+  a hand is currently seen.
+- **Fallback ladder** — camera denied → gradient background + touch; load fails → one
+  retry after 5 s; a detection exception retries 3× then rebuilds the tracker on the CPU
+  delegate before giving up; detection averaging too slow → halves its rate, then
+  rebuilds on CPU, then touch. Every step is visible in the pill — nothing fails
+  silently, and touch/mouse slicing is always on.
+- **Versus mode** — one retained ~200-byte JSON state on the room's `_versus` topic.
+  Each device is authoritative only while it acts (its own countdown and turn), so no
+  clock sync is needed and a second of relay lag is harmless; sequence numbers drop
+  stale states, and presence staleness drives the "waiting for…" recovery.
 - **Auto quality** — if fps sags, the canvas renders at a lower resolution and the fruit
   cap drops before anything else suffers.
 
@@ -110,12 +150,34 @@ Tested in a desktop browser preview (Chromium). **Not yet run on a physical iPad
   board with name + score; peer received local score updates; leave cleared everything;
   failure path falls back to a friendly message by construction.
 
+### Update 2 (hand feedback + Versus) test log
+
+- **Hand-motion slicing**: a synthetic fingertip sweep was fed through the *real*
+  detection pipeline (camera-coordinate mapping → smoothing → trail → collision) at the
+  real 15 Hz cadence and sliced a fruit parked mid-screen. Marker and green/yellow pill
+  transitions observed live; the 10-second "step back" hint fired.
+- **Recoverable failures**: two transient detection exceptions were absorbed (tracking
+  survived); a permanent failure disabled tracking *with* the pill flipping to Touch
+  mode while the game played on; the slow-GPU path live-rebuilt the tracker on the CPU
+  delegate and came back green.
+- **Versus, against the real public relay** with a protocol-correct simulated second
+  player: full best-of-3 (16/13/14 vs 20/2/20 → 1:2), giant live watcher score,
+  zero-click auto-advancing turns, mid-round disconnect → "Waiting for Emma…" →
+  reconnect → round restarted → match completed; the one-minute friendly cancel; kind
+  loser banner; both sides exited cleanly with the retained match state cleared.
+- Found and fixed in the process: a public relay can kick a client with a *clean*
+  disconnect, which silently stops mqtt.js auto-reconnect — the room heartbeat now
+  detects a dead client and rebuilds the connection.
+
 ### Known issues / honest caveats
 
 - **Physical-iPad smoke test pending** (needs a real device): camera permission flow,
   actual hand-tracking fps, audio after first tap. Checklist: load URL → Start with
-  camera → Allow → wave → fruit pops → tap ⚙️ → slider moves.
+  camera → Allow → wave → green pill + glowing dot → fruit pops → tap ⚙️ → slider moves.
 - Hand identity can swap when two hands cross — a trail may briefly jump. Cosmetic.
 - Very old iPads (pre-2017, no decent WebGL) will land in touch mode by design.
 - Public MQTT relays carry no uptime promise; the room may occasionally be unavailable.
+- Versus turn timing is driven by each device while it plays; if a device sleeps
+  mid-turn (auto-lock), the other side sees "waiting" until it wakes. Keep auto-lock off
+  or screens awake during a match.
 - The score resets on reload — by design, it just counts up forever within a session.
